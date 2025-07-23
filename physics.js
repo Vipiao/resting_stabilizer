@@ -442,6 +442,14 @@ class PhysicsEngine {
             if (impulseMagnitude > 0.01) {
                 const impulseDirection = Vector2.normalize(impulse);
                 cache.restingVelocity = Vector2.add(cache.restingVelocity, Vector2.multiply(impulseDirection, impulseMagnitude * 0.1));
+
+            // Update resting angular velocities based on torque
+            const rA = Vector2.subtract(contact.contactPoint, contact.bodyA.position);
+            const rB = Vector2.subtract(contact.contactPoint, contact.bodyB.position);
+            const angularImpulseA = Vector2.cross(rA, impulse) * contact.bodyA.invInertia;
+            const angularImpulseB = -Vector2.cross(rB, impulse) * contact.bodyB.invInertia;
+            cache.restingAngularVelocityA += angularImpulseA * 0.1;
+            cache.restingAngularVelocityB += angularImpulseB * 0.1;
             }
         }
     }
