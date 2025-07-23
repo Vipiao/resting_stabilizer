@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Physics Simulator</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background-color: #1a1a1a;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            border: 1px solid #444;
+            background-color: #000;
+            display: block;
+            margin: 20px auto;
+        }
+        .controls {
+            text-align: center;
+            margin: 10px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            background-color: #333;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #555;
+        }
+        .info {
+            text-align: center;
+            font-size: 14px;
+            color: #ccc;
+        }
+    </style>
+</head>
+<body>
+    <h1 style="text-align: center;">Physics Simulator - Resting Contact System</h1>
+    
+    <div class="controls">
+        <button onclick="physics.reset()">Reset</button>
+        <button onclick="physics.addRandomBox()">Add Box</button>
+        <button onclick="physics.togglePause()">Pause/Resume</button>
+    </div>
+    
+    <canvas id="canvas" width="1200" height="800"></canvas>
+    
+    <div class="info">
+        <p>Physics running at 60Hz with resting contact resolution</p>
+        <p>FPS: <span id="fps">0</span> | Bodies: <span id="bodyCount">0</span> | Contacts: <span id="contactCount">0</span></p>
+    </div>
+
+    <script src="physics.js"></script>
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Global physics instance
+        const physics = new PhysicsEngine(canvas.width, canvas.height);
+        
+        // FPS tracking
+        let frameCount = 0;
+        let lastTime = performance.now();
+        
+        function updateFPS() {
+            frameCount++;
+            const currentTime = performance.now();
+            if (currentTime - lastTime >= 1000) {
+                document.getElementById('fps').textContent = frameCount;
+                document.getElementById('bodyCount').textContent = physics.getBodies().length;
+                document.getElementById('contactCount').textContent = physics.getActiveContactCount();
+                frameCount = 0;
+                lastTime = currentTime;
+            }
+        }
+        
+        // Main game loop
+        function gameLoop() {
+            physics.update();
+            physics.render(ctx);
+            updateFPS();
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // Start the simulation
+        gameLoop();
+    </script>
+</body>
+</html>
