@@ -140,7 +140,8 @@ class ContactCache {
     constructor(bodyA, bodyB) {
         this.bodyA = bodyA;
         this.bodyB = bodyB;
-        this.restingVelocity = new Vector2(0, 0);
+        this.restingVelocityA = new Vector2(0, 0);
+        this.restingVelocityB = new Vector2(0, 0);
         this.restingAngularVelocityA = 0;
         this.restingAngularVelocityB = 0;
         this.lastUpdateTime = 0;
@@ -458,15 +459,15 @@ class PhysicsEngine {
             // Process each contact point
             for (let i = 0; i < contact.contactPoints.length; i++) {
                 // Calculate combined velocities (delta + resting)
-                const combinedVelA = Vector2.subtract(contact.bodyA.deltaVelocity, cache.restingVelocity);
-                const combinedVelB = Vector2.subtract(contact.bodyB.deltaVelocity, cache.restingVelocity);
+                const combinedVelA = Vector2.subtract(contact.bodyA.deltaVelocity, cache.restingVelocityA);
+                const combinedVelB = Vector2.subtract(contact.bodyB.deltaVelocity, cache.restingVelocityB);
                 const combinedAngVelA = contact.bodyA.deltaAngularVelocity - cache.restingAngularVelocityA;
                 const combinedAngVelB = contact.bodyB.deltaAngularVelocity - cache.restingAngularVelocityB;
                 
                 const impulse = this.calculateImpulse(contact, i, combinedVelA, combinedVelB, combinedAngVelA, combinedAngVelB, false);
                 
                 // Apply to both real and delta velocities
-                this.applyImpulseToVelocities(contact, i, impulse, true, true);
+                this.applyImpulseToVelocities(contact, i, impulse, true, true, false);
             }
         }
     }
@@ -483,21 +484,7 @@ class PhysicsEngine {
                     contact.bodyA.deltaAngularVelocity, contact.bodyB.deltaAngularVelocity, true);
                 
                 // Apply to delta velocities
-                this.applyImpulseToVelocities(contact, i, impulse, false, true);
-                
-                // Update resting velocities
-                const impulseMagnitude = Vector2.length(impulse);
-                const impulseDirection = Vector2.normalize(impulse);
-                cache.restingVelocity = Vector2.add(cache.restingVelocity, Vector2.multiply(impulseDirection, impulseMagnitude * 0.1));
-
-                // Update resting angular velocities based on torque
-                const contactPoint = contact.contactPoints[i];
-                const rA = Vector2.subtract(contactPoint, contact.bodyA.position);
-                const rB = Vector2.subtract(contactPoint, contact.bodyB.position);
-                const angularImpulseA = Vector2.cross(rA, impulse) * contact.bodyA.invInertia;
-                const angularImpulseB = -Vector2.cross(rB, impulse) * contact.bodyB.invInertia;
-                cache.restingAngularVelocityA += angularImpulseA * 0.1;
-                cache.restingAngularVelocityB += angularImpulseB * 0.1;
+                this.applyImpulseToVelocities(contact, i, impulse, false, true, true);
             }
         }
     }
@@ -511,7 +498,7 @@ class PhysicsEngine {
                     contact.bodyA.velocity, contact.bodyB.velocity,
                     contact.bodyA.angularVelocity, contact.bodyB.angularVelocity, false);
                 
-                this.applyImpulseToVelocities(contact, i, impulse, true, false);
+                    this.applyImpulseToVelocities(contact, i, impulse, true, false, false);
             }
         }
     }
@@ -558,7 +545,7 @@ class PhysicsEngine {
         return Vector2.multiply(contact.normal, impulseMagnitude);
     }
     
-    applyImpulseToVelocities(contact, contactPointIndex, impulse, applyToReal, applyToDelta) {
+    applyImpulseToVelocities(contact, contactPointIndex, impulse, applyToReal, applyToDelta, applyToResting) {
         const contactPoint = contact.contactPoints[contactPointIndex];
         if (applyToReal) {
             if (!contact.bodyA.isStatic) {
@@ -585,6 +572,23 @@ class PhysicsEngine {
                 contact.bodyB.deltaVelocity = Vector2.subtract(contact.bodyB.deltaVelocity, Vector2.multiply(impulse, contact.bodyB.invMass));
                 const rB = Vector2.subtract(contactPoint, contact.bodyB.position);
                 contact.bodyB.deltaAngularVelocity -= Vector2.cross(rB, impulse) * contact.bodyB.invInertia;
+            }
+        }
+        if (applyToResting) {
+            const cache = this.getContactCache(contact.bodyA, contact.bodyB);
+            
+            if (!contact.bodyA.isStatic) {
+                const deltaVA = Vector2.multiply(impulse, contact.bodyA.invMass);
+                cache.restingVelocityA = Vector2.add(cache.restingVelocityA, deltaVA);
+                const rA = Vector2.subtract(contactPoint, contact.bodyA.position);
+                cache.restingAngularVelocityA += Vector2.cross(rA, impulse) * contact.bodyA.invInertia;
+            }
+            
+            if (!contact.bodyB.isStatic) {
+                const deltaVB = Vector2.multiply(impulse, contact.bodyB.invMass);
+                cache.restingVelocityB = Vector2.subtract(cache.restingVelocityB, deltaVB);
+                const rB = Vector2.subtract(contactPoint, contact.bodyB.position);
+                cache.restingAngularVelocityB -= Vector2.cross(rB, impulse) * contact.bodyB.invInertia;
             }
         }
     }
