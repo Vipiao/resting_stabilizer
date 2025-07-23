@@ -160,7 +160,13 @@ class PhysicsEngine {
         this.gravity = new Vector2(0, 1 / this.hz); // pixels/tick²
         this.isPaused = false;
         this.currentTime = 0;
-        this.cacheTimeout = this.hz * 2; // 2 seconds worth of ticks
+        this.cacheTimeout = this.hz * 0.5; // 0.5 seconds worth of ticks
+
+        // Mouse interaction state
+        this.mousePosition = new Vector2(0, 0);
+        this.grabbedBody = null;
+        this.grabOffset = new Vector2(0, 0);
+        this.isMouseDown = false;
         
         this.initializeWorld();
     }
@@ -220,6 +226,9 @@ class PhysicsEngine {
         
         // 8. Apply normal collision resolution
         this.applyNormalCollision();
+
+        // 9. Handle mouse interactions
+        this.updateMouseInteraction();
         
         // Clean up old cache entries
         this.cleanupContactCache();
@@ -527,6 +536,58 @@ class PhysicsEngine {
             }
         }
     }
+
+    // Mouse interaction methods
+    handleMouseDown(x, y) {
+        this.isMouseDown = true;
+        this.mousePosition = new Vector2(x, y);
+        
+        // Find the body under the mouse cursor
+        const bodyUnderMouse = this.getBodyAtPoint(this.mousePosition);
+        if (bodyUnderMouse && !bodyUnderMouse.isStatic) {
+            this.grabbedBody = bodyUnderMouse;
+            // Calculate offset from object center to mouse position
+            this.grabOffset = Vector2.subtract(this.mousePosition, bodyUnderMouse.position);
+        }
+    }
+    
+    handleMouseMove(x, y) {
+        this.mousePosition = new Vector2(x, y);
+    }
+    
+    handleMouseUp() {
+        this.isMouseDown = false;
+        this.grabbedBody = null;
+        this.grabOffset = new Vector2(0, 0);
+    }
+    
+    getBodyAtPoint(point) {
+        // Check bodies in reverse order (top to bottom rendering)
+        for (let i = this.bodies.length - 1; i >= 0; i--) {
+            const body = this.bodies[i];
+            const vertices = body.getVertices();
+            if (this.isPointInRectangle(point, vertices)) {
+                return body;
+            }
+        }
+        return null;
+    }
+    
+    updateMouseInteraction() {
+        if (this.grabbedBody && this.isMouseDown) {
+            // Calculate target position (mouse position minus grab offset)
+            const targetPosition = Vector2.subtract(this.mousePosition, this.grabOffset);
+            
+            // Move object position towards target by 10%
+            const positionDelta = Vector2.subtract(targetPosition, this.grabbedBody.position);
+            const newPosition = Vector2.add(this.grabbedBody.position, Vector2.multiply(positionDelta, 0.1));
+            this.grabbedBody.position = newPosition;
+            
+            // Reduce velocity by 40%
+            this.grabbedBody.velocity = Vector2.multiply(this.grabbedBody.velocity, 0.6);
+            this.grabbedBody.angularVelocity *= 0.6;
+        }
+    }
     
     render(ctx) {
         ctx.clearRect(0, 0, this.worldWidth, this.worldHeight);
@@ -542,6 +603,14 @@ class PhysicsEngine {
             ctx.beginPath();
             ctx.arc(contact.contactPoint.x, contact.contactPoint.y, 3, 0, 2 * Math.PI);
             ctx.fill();
+        }
+        // Render grab indicator
+        if (this.grabbedBody && this.isMouseDown) {
+            ctx.strokeStyle = 'lime';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(this.grabbedBody.position.x, this.grabbedBody.position.y, Math.max(this.grabbedBody.width, this.grabbedBody.height) / 2 + 5, 0, 2 * Math.PI);
+            ctx.stroke();
         }
     }
     

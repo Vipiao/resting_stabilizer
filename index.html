@@ -61,6 +61,34 @@
     <script>
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
+
+        // Mouse interaction
+        function getMousePos(canvas, e) {
+            const rect = canvas.getBoundingClientRect();
+            return {
+                x: e.clientX - rect.left,
+                y: e.clientY - rect.top
+            };
+        }
+        
+        canvas.addEventListener('mousedown', (e) => {
+            const mousePos = getMousePos(canvas, e);
+            physics.handleMouseDown(mousePos.x, mousePos.y);
+        });
+        
+        canvas.addEventListener('mousemove', (e) => {
+            const mousePos = getMousePos(canvas, e);
+            physics.handleMouseMove(mousePos.x, mousePos.y);
+        });
+        
+        canvas.addEventListener('mouseup', (e) => {
+            physics.handleMouseUp();
+        });
+        
+        // Prevent context menu on right click
+        canvas.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+        });
         
         // Global physics instance
         const physics = new PhysicsEngine(canvas.width, canvas.height);
