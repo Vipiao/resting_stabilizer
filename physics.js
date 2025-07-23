@@ -367,7 +367,8 @@ class PhysicsEngine {
     
     separateObjects() {
         for (const contact of this.contacts) {
-            const correction = Vector2.multiply(contact.normal, contact.penetration * 0.3);
+            const adjustedPenetration = Math.max(0, contact.penetration - 1);
+            const correction = Vector2.multiply(contact.normal, adjustedPenetration * 0.3);
             
             if (!contact.bodyA.isStatic) {
                 contact.bodyA.position = Vector2.subtract(contact.bodyA.position, Vector2.multiply(correction, 0.5));
