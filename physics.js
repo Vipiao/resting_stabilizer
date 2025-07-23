@@ -74,7 +74,7 @@ class Rectangle {
     
     generateRandomColor() {
         if (this.isStatic) return '#444444';
-        const hue = Math.random() * 360;
+        const hue = random() * 360;
         return `hsl(${hue}, 70%, 60%)`;
     }
     
@@ -118,14 +118,20 @@ class Rectangle {
 
 // Collision contact information
 class Contact {
-    constructor(bodyA, bodyB, contactPoint, normal, penetration) {
+    constructor(bodyA, bodyB, contactPoints, normal, penetration) {
         this.bodyA = bodyA;
         this.bodyB = bodyB;
-        this.contactPoint = contactPoint;
+        this.contactPoints = contactPoints; // Array of contact points, one per contact point
         this.normal = normal;
         this.penetration = penetration;
-        this.collisionMass = 0;
-        this.collisionMassCalculated = false;
+        this.collisionMasses = []; // Array of collision masses, one per contact point
+        this.collisionMassesCalculated = []; // Array of booleans, one per contact point
+
+        // Initialize arrays
+        for (let i = 0; i < contactPoints.length; i++) {
+            this.collisionMasses.push(0);
+            this.collisionMassesCalculated.push(false);
+        }
     }
 }
 
@@ -147,6 +153,32 @@ class ContactCache {
         return `${minId}_${maxId}`;
     }
 }
+
+// Deterministic random number generator using LCG
+class DeterministicRandom {
+        constructor(seed = 12345) {
+            this.seed = seed;
+        }
+        
+        // LCG parameters (same as used by glibc)
+        next() {
+            this.seed = (this.seed * 1103515245 + 12345) & 0x7fffffff;
+            return this.seed / 0x7fffffff; // Return 0-1 range
+        }
+        
+        // Reset to initial seed
+        reset(seed = 12345) {
+            this.seed = seed;
+        }
+    }
+    
+    // Global deterministic random instance
+    const detRandom = new DeterministicRandom();
+    
+    // Replace random() calls with this
+    function random() {
+        return detRandom.next();
+    }
 
 // Main physics engine
 class PhysicsEngine {
@@ -183,17 +215,17 @@ class PhysicsEngine {
     }
     
     addRandomBox() {
-        const width = 30 + Math.random() * 40;
-        const height = 30 + Math.random() * 40;
-        const x = 100 + Math.random() * (this.worldWidth - 200);
-        const y = 50 + Math.random() * 200;
-        const mass = 0.5 + Math.random() * 2.0;
+        const width = 30 + random() * 40;
+        const height = 30 + random() * 40;
+        const x = 400 + random() * (this.worldWidth - 800);
+        const y = 50 + random() * 200;
+        const mass = 0.5 + random() * 2.0;
         
         const box = new Rectangle(x, y, width, height, mass, false);
         // Add some initial random velocity
-        box.velocity.x = (Math.random() - 0.5) * 1;
-        box.velocity.y = (Math.random() - 0.5) * 5;
-        box.angularVelocity = (Math.random() - 0.5) * 0.5;
+        box.velocity.x = (random() - 0.5) * 1;
+        box.velocity.y = (random() - 0.5) * 5;
+        box.angularVelocity = (random() - 0.5) * 0.5;
         
         this.bodies.push(box);
     }
@@ -217,6 +249,12 @@ class PhysicsEngine {
         
         // 5. Move objects according to velocities
         this.integrateMotion();
+        for (const contact of this.contacts) {
+            // Calculate collision mass for each contact point
+            for (let i = 0; i < contact.contactPoints.length; i++) {
+                this.calculateCollisionMass(contact, i);
+            }
+        }
         
         // 6. Apply resting forces
         this.applyRestingForces();
@@ -296,9 +334,9 @@ class PhysicsEngine {
         }
         
         // Find contact point (simple approach: check if vertices are inside)
-        contactPoint = this.findContactPoint(verticesA, verticesB, rectA, rectB);
+        const contactPoints = this.findContactPoints(verticesA, verticesB, rectA, rectB);
         
-        return new Contact(rectA, rectB, contactPoint, separationAxis, minOverlap);
+        return new Contact(rectA, rectB, contactPoints, separationAxis, minOverlap);
     }
     
     getRectangleAxes(vertices) {
@@ -332,22 +370,28 @@ class PhysicsEngine {
         return Vector2.multiply(sum, 1.0 / vertices.length);
     }
     
-    findContactPoint(verticesA, verticesB, rectA, rectB) {
+    findContactPoints(verticesA, verticesB, rectA, rectB) {
+        const contactPoints = [];
+
         // Simple contact point: check if any vertex of A is inside B, or vice versa
         for (const vertex of verticesA) {
             if (this.isPointInRectangle(vertex, verticesB)) {
-                return vertex;
+                contactPoints.push(vertex);
             }
         }
         
         for (const vertex of verticesB) {
             if (this.isPointInRectangle(vertex, verticesA)) {
-                return vertex;
+                contactPoints.push(vertex);
             }
         }
+
+        // If no contact points found, use fallback
+        if (contactPoints.length === 0) {
+            contactPoints.push(Vector2.multiply(Vector2.add(rectA.position, rectB.position), 0.5));
+        }
         
-        // Fallback: use average of closest points
-        return Vector2.multiply(Vector2.add(rectA.position, rectB.position), 0.5);
+        return contactPoints;
     }
     
     isPointInRectangle(point, rectVertices) {
@@ -409,20 +453,21 @@ class PhysicsEngine {
     applyRestingForces() {
         // Phase 1: Use (delta + resting) velocities, apply to both real and delta
         for (const contact of this.contacts) {
-            this.calculateCollisionMass(contact);
-            
             const cache = this.getContactCache(contact.bodyA, contact.bodyB);
             
-            // Calculate combined velocities (delta + resting)
-            const combinedVelA = Vector2.add(contact.bodyA.deltaVelocity, cache.restingVelocity);
-            const combinedVelB = Vector2.add(contact.bodyB.deltaVelocity, cache.restingVelocity);
-            const combinedAngVelA = contact.bodyA.deltaAngularVelocity + cache.restingAngularVelocityA;
-            const combinedAngVelB = contact.bodyB.deltaAngularVelocity + cache.restingAngularVelocityB;
-            
-            const impulse = this.calculateImpulse(contact, combinedVelA, combinedVelB, combinedAngVelA, combinedAngVelB);
-            
-            // Apply to both real and delta velocities
-            this.applyImpulseToVelocities(contact, impulse, true, true);
+            // Process each contact point
+            for (let i = 0; i < contact.contactPoints.length; i++) {
+                // Calculate combined velocities (delta + resting)
+                const combinedVelA = Vector2.subtract(contact.bodyA.deltaVelocity, cache.restingVelocity);
+                const combinedVelB = Vector2.subtract(contact.bodyB.deltaVelocity, cache.restingVelocity);
+                const combinedAngVelA = contact.bodyA.deltaAngularVelocity - cache.restingAngularVelocityA;
+                const combinedAngVelB = contact.bodyB.deltaAngularVelocity - cache.restingAngularVelocityB;
+                
+                const impulse = this.calculateImpulse(contact, i, combinedVelA, combinedVelB, combinedAngVelA, combinedAngVelB, false);
+                
+                // Apply to both real and delta velocities
+                this.applyImpulseToVelocities(contact, i, impulse, true, true);
+            }
         }
     }
     
@@ -431,26 +476,28 @@ class PhysicsEngine {
         for (const contact of this.contacts) {
             const cache = this.getContactCache(contact.bodyA, contact.bodyB);
             
-            const impulse = this.calculateImpulse(contact, 
-                contact.bodyA.deltaVelocity, contact.bodyB.deltaVelocity,
-                contact.bodyA.deltaAngularVelocity, contact.bodyB.deltaAngularVelocity);
-            
-            // Apply to delta velocities
-            this.applyImpulseToVelocities(contact, impulse, false, true);
-            
-            // Update resting velocities
-            const impulseMagnitude = Vector2.length(impulse);
-            if (impulseMagnitude > 0.01) {
+            // Process each contact point
+            for (let i = 0; i < contact.contactPoints.length; i++) {
+                const impulse = this.calculateImpulse(contact, i,
+                    contact.bodyA.deltaVelocity, contact.bodyB.deltaVelocity,
+                    contact.bodyA.deltaAngularVelocity, contact.bodyB.deltaAngularVelocity, true);
+                
+                // Apply to delta velocities
+                this.applyImpulseToVelocities(contact, i, impulse, false, true);
+                
+                // Update resting velocities
+                const impulseMagnitude = Vector2.length(impulse);
                 const impulseDirection = Vector2.normalize(impulse);
                 cache.restingVelocity = Vector2.add(cache.restingVelocity, Vector2.multiply(impulseDirection, impulseMagnitude * 0.1));
 
-            // Update resting angular velocities based on torque
-            const rA = Vector2.subtract(contact.contactPoint, contact.bodyA.position);
-            const rB = Vector2.subtract(contact.contactPoint, contact.bodyB.position);
-            const angularImpulseA = Vector2.cross(rA, impulse) * contact.bodyA.invInertia;
-            const angularImpulseB = -Vector2.cross(rB, impulse) * contact.bodyB.invInertia;
-            cache.restingAngularVelocityA += angularImpulseA * 0.1;
-            cache.restingAngularVelocityB += angularImpulseB * 0.1;
+                // Update resting angular velocities based on torque
+                const contactPoint = contact.contactPoints[i];
+                const rA = Vector2.subtract(contactPoint, contact.bodyA.position);
+                const rB = Vector2.subtract(contactPoint, contact.bodyB.position);
+                const angularImpulseA = Vector2.cross(rA, impulse) * contact.bodyA.invInertia;
+                const angularImpulseB = -Vector2.cross(rB, impulse) * contact.bodyB.invInertia;
+                cache.restingAngularVelocityA += angularImpulseA * 0.1;
+                cache.restingAngularVelocityB += angularImpulseB * 0.1;
             }
         }
     }
@@ -458,19 +505,24 @@ class PhysicsEngine {
     applyNormalCollision() {
         // Phase 3: Use real velocities, apply to real velocities
         for (const contact of this.contacts) {
-            const impulse = this.calculateImpulse(contact,
-                contact.bodyA.velocity, contact.bodyB.velocity,
-                contact.bodyA.angularVelocity, contact.bodyB.angularVelocity);
-            
-            this.applyImpulseToVelocities(contact, impulse, true, false);
+            // Process each contact point
+            for (let i = 0; i < contact.contactPoints.length; i++) {
+                const impulse = this.calculateImpulse(contact, i,
+                    contact.bodyA.velocity, contact.bodyB.velocity,
+                    contact.bodyA.angularVelocity, contact.bodyB.angularVelocity, false);
+                
+                this.applyImpulseToVelocities(contact, i, impulse, true, false);
+            }
         }
     }
     
-    calculateCollisionMass(contact) {
-        if (contact.collisionMassCalculated) return;
+    calculateCollisionMass(contact, contactPointIndex) {
+        if (contact.collisionMassesCalculated[contactPointIndex]) return;
         
-        const rA = Vector2.subtract(contact.contactPoint, contact.bodyA.position);
-        const rB = Vector2.subtract(contact.contactPoint, contact.bodyB.position);
+        const contactPoint = contact.contactPoints[contactPointIndex];
+        
+        const rA = Vector2.subtract(contactPoint, contact.bodyA.position);
+        const rB = Vector2.subtract(contactPoint, contact.bodyB.position);
         
         const rAcrossN = Vector2.cross(rA, contact.normal);
         const rBcrossN = Vector2.cross(rB, contact.normal);
@@ -479,13 +531,16 @@ class PhysicsEngine {
         const rotTermB = rBcrossN * rBcrossN * contact.bodyB.invInertia;
         
         const invEffectiveMass = contact.bodyA.invMass + contact.bodyB.invMass + rotTermA + rotTermB;
-        contact.collisionMass = invEffectiveMass > 0 ? 1.0 / invEffectiveMass : 0;
-        contact.collisionMassCalculated = true;
+        contact.collisionMasses[contactPointIndex] = invEffectiveMass > 0 ? 1.0 / invEffectiveMass : 0;
+        contact.collisionMassesCalculated[contactPointIndex] = true;
     }
     
-    calculateImpulse(contact, velA, velB, angVelA, angVelB) {
-        const rA = Vector2.subtract(contact.contactPoint, contact.bodyA.position);
-        const rB = Vector2.subtract(contact.contactPoint, contact.bodyB.position);
+    calculateImpulse(contact, contactPointIndex, velA, velB, angVelA, angVelB, allowNegative = false) {
+        const contactPoint = contact.contactPoints[contactPointIndex];
+        const collisionMass = contact.collisionMasses[contactPointIndex];
+        
+        const rA = Vector2.subtract(contactPoint, contact.bodyA.position);
+        const rB = Vector2.subtract(contactPoint, contact.bodyB.position);
         
         const velAtContactA = Vector2.add(velA, new Vector2(-rA.y * angVelA, rA.x * angVelA));
         const velAtContactB = Vector2.add(velB, new Vector2(-rB.y * angVelB, rB.x * angVelB));
@@ -493,27 +548,28 @@ class PhysicsEngine {
         const relativeVel = Vector2.subtract(velAtContactA, velAtContactB);
         const relativeVelNormal = Vector2.dot(relativeVel, contact.normal);
         
-        if (relativeVelNormal < 0) {
+        if (relativeVelNormal < 0 && !allowNegative) {
             return new Vector2(0, 0);
         }
         
         const restitution = 0.0;
-        const impulseMagnitude = -(1.0 + restitution) * relativeVelNormal * contact.collisionMass;
+        const impulseMagnitude = -(1.0 + restitution) * relativeVelNormal * collisionMass;
         
         return Vector2.multiply(contact.normal, impulseMagnitude);
     }
     
-    applyImpulseToVelocities(contact, impulse, applyToReal, applyToDelta) {
+    applyImpulseToVelocities(contact, contactPointIndex, impulse, applyToReal, applyToDelta) {
+        const contactPoint = contact.contactPoints[contactPointIndex];
         if (applyToReal) {
             if (!contact.bodyA.isStatic) {
                 contact.bodyA.velocity = Vector2.add(contact.bodyA.velocity, Vector2.multiply(impulse, contact.bodyA.invMass));
-                const rA = Vector2.subtract(contact.contactPoint, contact.bodyA.position);
+                const rA = Vector2.subtract(contactPoint, contact.bodyA.position);
                 contact.bodyA.angularVelocity += Vector2.cross(rA, impulse) * contact.bodyA.invInertia;
             }
             
             if (!contact.bodyB.isStatic) {
                 contact.bodyB.velocity = Vector2.subtract(contact.bodyB.velocity, Vector2.multiply(impulse, contact.bodyB.invMass));
-                const rB = Vector2.subtract(contact.contactPoint, contact.bodyB.position);
+                const rB = Vector2.subtract(contactPoint, contact.bodyB.position);
                 contact.bodyB.angularVelocity -= Vector2.cross(rB, impulse) * contact.bodyB.invInertia;
             }
         }
@@ -521,13 +577,13 @@ class PhysicsEngine {
         if (applyToDelta) {
             if (!contact.bodyA.isStatic) {
                 contact.bodyA.deltaVelocity = Vector2.add(contact.bodyA.deltaVelocity, Vector2.multiply(impulse, contact.bodyA.invMass));
-                const rA = Vector2.subtract(contact.contactPoint, contact.bodyA.position);
+                const rA = Vector2.subtract(contactPoint, contact.bodyA.position);
                 contact.bodyA.deltaAngularVelocity += Vector2.cross(rA, impulse) * contact.bodyA.invInertia;
             }
             
             if (!contact.bodyB.isStatic) {
                 contact.bodyB.deltaVelocity = Vector2.subtract(contact.bodyB.deltaVelocity, Vector2.multiply(impulse, contact.bodyB.invMass));
-                const rB = Vector2.subtract(contact.contactPoint, contact.bodyB.position);
+                const rB = Vector2.subtract(contactPoint, contact.bodyB.position);
                 contact.bodyB.deltaAngularVelocity -= Vector2.cross(rB, impulse) * contact.bodyB.invInertia;
             }
         }
@@ -609,9 +665,11 @@ class PhysicsEngine {
         // Render contact points
         ctx.fillStyle = 'red';
         for (const contact of this.contacts) {
-            ctx.beginPath();
-            ctx.arc(contact.contactPoint.x, contact.contactPoint.y, 3, 0, 2 * Math.PI);
-            ctx.fill();
+            for (const contactPoint of contact.contactPoints) {
+                ctx.beginPath();
+                ctx.arc(contactPoint.x, contactPoint.y, 3, 0, 2 * Math.PI);
+                ctx.fill();
+            }
         }
         // Render grab indicator
         if (this.grabbedBody && this.isMouseDown) {
