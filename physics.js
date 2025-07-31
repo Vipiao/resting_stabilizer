@@ -65,6 +65,10 @@ class Rectangle {
         // Moment of inertia for rectangle: (1/12) * mass * (width² + height²)
         this.inertia = isStatic ? Infinity : (mass * (width * width + height * height)) / 12.0;
         this.invInertia = isStatic ? 0 : 1.0 / this.inertia;
+
+        // Friction coefficients
+        this.staticFriction = isStatic ? 0.9 : 0.6;
+        this.dynamicFriction = isStatic ? 0.7 : 0.4;
         
         this.id = Rectangle.nextId++;
         this.color = this.generateRandomColor();
@@ -123,14 +127,21 @@ class Contact {
         this.bodyB = bodyB;
         this.contactPoints = contactPoints; // Array of contact points, one per contact point
         this.normal = normal;
+        this.tangent = Vector2.normalize(Vector2.perpendicular(normal));
         this.penetration = penetration;
         this.collisionMasses = []; // Array of collision masses, one per contact point
+        this.tangentialCollisionMasses = []; // Array of tangential collision masses
         this.collisionMassesCalculated = []; // Array of booleans, one per contact point
+        this.tangentialCollisionMassesCalculated = []; // Array of booleans for tangential
+        this.normalForceMagnitudes = []; // Array to store normal force magnitudes from resting phase
 
         // Initialize arrays
         for (let i = 0; i < contactPoints.length; i++) {
             this.collisionMasses.push(0);
+            this.tangentialCollisionMasses.push(0);
             this.collisionMassesCalculated.push(false);
+            this.tangentialCollisionMassesCalculated.push(false);
+            this.normalForceMagnitudes.push(0);
         }
     }
 }
@@ -210,7 +221,7 @@ class PhysicsEngine {
         this.bodies.push(ground);
         
         // Create some random boxes
-        for (let i = 0; i < 8; i++) {
+        for (let i = 0; i < 1; i++) {
             this.addRandomBox();
         }
     }
@@ -239,16 +250,13 @@ class PhysicsEngine {
         // 1. Collision detection and contact generation
         this.detectCollisions();
         
-        // 2. Position correction (separate overlapping objects)
-        this.separateObjects();
-        
-        // 3. Reset delta velocities
+        // 2. Reset delta velocities
         this.resetDeltaVelocities();
         
-        // 4. Apply continuous forces (gravity)
+        // 3. Apply continuous forces (gravity)
         this.applyForces();
         
-        // 5. Move objects according to velocities
+        // 4. Move objects according to velocities
         this.integrateMotion();
         for (const contact of this.contacts) {
             // Calculate collision mass for each contact point
@@ -256,6 +264,9 @@ class PhysicsEngine {
                 this.calculateCollisionMass(contact, i);
             }
         }
+        
+        // 5. Position correction (separate overlapping objects)
+        this.separateObjects();
         
         // 6. Apply resting forces
         this.applyRestingForces();
@@ -412,14 +423,28 @@ class PhysicsEngine {
     
     separateObjects() {
         for (const contact of this.contacts) {
-            const adjustedPenetration = Math.max(0, contact.penetration - 1);
-            const correction = Vector2.multiply(contact.normal, adjustedPenetration * 0.3);
+            const adjustedPenetration = Math.max(0, contact.penetration) - 2;
             
-            if (!contact.bodyA.isStatic) {
-                contact.bodyA.position = Vector2.subtract(contact.bodyA.position, Vector2.multiply(correction, 0.5));
-            }
-            if (!contact.bodyB.isStatic) {
-                contact.bodyB.position = Vector2.add(contact.bodyB.position, Vector2.multiply(correction, 0.5));
+            // Process each contact point
+            for (let i = 0; i < contact.contactPoints.length; i++) {
+                const contactPoint = contact.contactPoints[i];
+                const collisionMass = contact.collisionMasses[i];
+                
+                // Calculate displacement using collision mass (like impulse but for position)
+                const displacement = Vector2.multiply(contact.normal, adjustedPenetration * collisionMass * 0.3);
+                
+                // Apply displacement to position
+                if (!contact.bodyA.isStatic) {
+                    contact.bodyA.position = Vector2.subtract(contact.bodyA.position, Vector2.multiply(displacement, contact.bodyA.invMass));
+                    const rA = Vector2.subtract(contactPoint, contact.bodyA.position);
+                    contact.bodyA.angle -= Vector2.cross(rA, displacement) * contact.bodyA.invInertia;
+                }
+                
+                if (!contact.bodyB.isStatic) {
+                    contact.bodyB.position = Vector2.add(contact.bodyB.position, Vector2.multiply(displacement, contact.bodyB.invMass));
+                    const rB = Vector2.subtract(contactPoint, contact.bodyB.position);
+                    contact.bodyB.angle += Vector2.cross(rB, displacement) * contact.bodyB.invInertia;
+                }
             }
         }
     }
@@ -464,10 +489,27 @@ class PhysicsEngine {
                 const combinedAngVelA = contact.bodyA.deltaAngularVelocity - cache.restingAngularVelocityA;
                 const combinedAngVelB = contact.bodyB.deltaAngularVelocity - cache.restingAngularVelocityB;
                 
-                const impulse = this.calculateImpulse(contact, i, combinedVelA, combinedVelB, combinedAngVelA, combinedAngVelB, false);
+                // Normal force
+                const impulse = this.calculateImpulse(contact, i, combinedVelA, combinedVelB, combinedAngVelA, combinedAngVelB, 
+                    contact.collisionMasses[i], contact.normal, false);
+
+                // Store normal force magnitude for later phases
+                contact.normalForceMagnitudes[i] = Vector2.length(impulse);
+
+                // Friction force
+                const frictionImpulse = this.calculateImpulse(contact, i, combinedVelA, combinedVelB, combinedAngVelA, combinedAngVelB,
+                    contact.tangentialCollisionMasses[i], contact.tangent, true);
+                const combinedStaticFriction = Math.min(contact.bodyA.staticFriction, contact.bodyB.staticFriction);
+                const maxStaticFriction = contact.normalForceMagnitudes[i] * combinedStaticFriction;
                 
-                // Apply to both real and delta velocities
-                this.applyImpulseToVelocities(contact, i, impulse, true, true, false);
+                // Combine impulses and apply once
+                let totalImpulse = impulse;
+                if (Vector2.length(frictionImpulse) <= maxStaticFriction) {
+                    //totalImpulse = Vector2.add(impulse, frictionImpulse);
+                }
+
+                // Apply combined impulse to both real and delta velocities
+                this.applyImpulseToVelocities(contact, i, totalImpulse, true, true, false);
             }
         }
     }
@@ -479,12 +521,28 @@ class PhysicsEngine {
             
             // Process each contact point
             for (let i = 0; i < contact.contactPoints.length; i++) {
+                // Normal force
                 const impulse = this.calculateImpulse(contact, i,
                     contact.bodyA.deltaVelocity, contact.bodyB.deltaVelocity,
-                    contact.bodyA.deltaAngularVelocity, contact.bodyB.deltaAngularVelocity, true);
+                    contact.bodyA.deltaAngularVelocity, contact.bodyB.deltaAngularVelocity,
+                    contact.collisionMasses[i], contact.normal, true);
                 
-                // Apply to delta velocities
-                this.applyImpulseToVelocities(contact, i, impulse, false, true, true);
+                // Friction force
+                const frictionImpulse = this.calculateImpulse(contact, i,
+                    contact.bodyA.deltaVelocity, contact.bodyB.deltaVelocity,
+                    contact.bodyA.deltaAngularVelocity, contact.bodyB.deltaAngularVelocity,
+                    contact.tangentialCollisionMasses[i], contact.tangent, true);
+                const combinedStaticFriction = Math.min(contact.bodyA.staticFriction, contact.bodyB.staticFriction);
+                const maxStaticFriction = (contact.normalForceMagnitudes[i] + Vector2.length(impulse)) * combinedStaticFriction;
+                
+                // Combine impulses and apply once
+                let totalImpulse = impulse;
+                if (Vector2.length(frictionImpulse) <= maxStaticFriction) {
+                    //totalImpulse = Vector2.add(impulse, frictionImpulse);
+                }
+                
+                // Apply combined impulse to delta velocities and resting
+                this.applyImpulseToVelocities(contact, i, totalImpulse, false, true, true);
             }
         }
     }
@@ -494,11 +552,36 @@ class PhysicsEngine {
         for (const contact of this.contacts) {
             // Process each contact point
             for (let i = 0; i < contact.contactPoints.length; i++) {
+                // Normal collision
                 const impulse = this.calculateImpulse(contact, i,
                     contact.bodyA.velocity, contact.bodyB.velocity,
-                    contact.bodyA.angularVelocity, contact.bodyB.angularVelocity, false);
+                    contact.bodyA.angularVelocity, contact.bodyB.angularVelocity,
+                    contact.collisionMasses[i], contact.normal, false);
+
+                // Friction collision
+                const frictionImpulse = this.calculateImpulse(contact, i,
+                    contact.bodyA.velocity, contact.bodyB.velocity,
+                    contact.bodyA.angularVelocity, contact.bodyB.angularVelocity,
+                    contact.tangentialCollisionMasses[i], contact.tangent, true);
                 
-                    this.applyImpulseToVelocities(contact, i, impulse, true, false, false);
+                const combinedStaticFriction = Math.min(contact.bodyA.staticFriction, contact.bodyB.staticFriction);
+                const combinedDynamicFriction = Math.min(contact.bodyA.dynamicFriction, contact.bodyB.dynamicFriction);
+                const maxStaticFriction = (contact.normalForceMagnitudes[i] + Vector2.length(impulse)) * combinedStaticFriction;
+                
+                // Combine impulses and apply once
+                let totalImpulse = impulse;
+                if (Vector2.length(frictionImpulse) <= maxStaticFriction) {
+                    totalImpulse = Vector2.add(impulse, frictionImpulse);
+                } else {
+                    // Apply dynamic friction
+                    const dynamicFriction = (contact.normalForceMagnitudes[i] + Vector2.length(impulse)) * combinedDynamicFriction;
+                    const frictionDirection = Vector2.normalize(frictionImpulse);
+                    const dynamicFrictionImpulse = Vector2.multiply(frictionDirection, dynamicFriction);
+                    totalImpulse = Vector2.add(impulse, dynamicFrictionImpulse);
+                }
+
+                // Apply combined impulse to real velocities
+                this.applyImpulseToVelocities(contact, i, totalImpulse, true, false, false);
             }
         }
     }
@@ -511,6 +594,7 @@ class PhysicsEngine {
         const rA = Vector2.subtract(contactPoint, contact.bodyA.position);
         const rB = Vector2.subtract(contactPoint, contact.bodyB.position);
         
+        // Normal collision mass
         const rAcrossN = Vector2.cross(rA, contact.normal);
         const rBcrossN = Vector2.cross(rB, contact.normal);
         
@@ -520,11 +604,21 @@ class PhysicsEngine {
         const invEffectiveMass = contact.bodyA.invMass + contact.bodyB.invMass + rotTermA + rotTermB;
         contact.collisionMasses[contactPointIndex] = invEffectiveMass > 0 ? 1.0 / invEffectiveMass : 0;
         contact.collisionMassesCalculated[contactPointIndex] = true;
+
+        // Tangential collision mass
+        const rAcrossT = Vector2.cross(rA, contact.tangent);
+        const rBcrossT = Vector2.cross(rB, contact.tangent);
+        
+        const rotTermTA = rAcrossT * rAcrossT * contact.bodyA.invInertia;
+        const rotTermTB = rBcrossT * rBcrossT * contact.bodyB.invInertia;
+        
+        const invEffectiveMassT = contact.bodyA.invMass + contact.bodyB.invMass + rotTermTA + rotTermTB;
+        contact.tangentialCollisionMasses[contactPointIndex] = invEffectiveMassT > 0 ? 1.0 / invEffectiveMassT : 0;
+        contact.tangentialCollisionMassesCalculated[contactPointIndex] = true;
     }
     
-    calculateImpulse(contact, contactPointIndex, velA, velB, angVelA, angVelB, allowNegative = false) {
+    calculateImpulse(contact, contactPointIndex, velA, velB, angVelA, angVelB, collisionMass, direction, allowNegative = false, restitution = 0.0) {
         const contactPoint = contact.contactPoints[contactPointIndex];
-        const collisionMass = contact.collisionMasses[contactPointIndex];
         
         const rA = Vector2.subtract(contactPoint, contact.bodyA.position);
         const rB = Vector2.subtract(contactPoint, contact.bodyB.position);
@@ -533,16 +627,15 @@ class PhysicsEngine {
         const velAtContactB = Vector2.add(velB, new Vector2(-rB.y * angVelB, rB.x * angVelB));
         
         const relativeVel = Vector2.subtract(velAtContactA, velAtContactB);
-        const relativeVelNormal = Vector2.dot(relativeVel, contact.normal);
+        const relativeVelDirection = Vector2.dot(relativeVel, direction);
         
-        if (relativeVelNormal < 0 && !allowNegative) {
+        if (relativeVelDirection < 0 && !allowNegative) {
             return new Vector2(0, 0);
         }
         
-        const restitution = 0.0;
-        const impulseMagnitude = -(1.0 + restitution) * relativeVelNormal * collisionMass;
+        const impulseMagnitude = -(1.0 + restitution) * relativeVelDirection * collisionMass;
         
-        return Vector2.multiply(contact.normal, impulseMagnitude);
+        return Vector2.multiply(direction, impulseMagnitude);
     }
     
     applyImpulseToVelocities(contact, contactPointIndex, impulse, applyToReal, applyToDelta, applyToResting) {
@@ -592,7 +685,7 @@ class PhysicsEngine {
             }
         }
     }
-    
+
     getContactCache(bodyA, bodyB) {
         const key = new ContactCache(bodyA, bodyB).key;
         return this.contactCache.get(key);
