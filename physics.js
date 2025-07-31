@@ -269,10 +269,10 @@ class PhysicsEngine {
         this.separateObjects();
         
         // 6. Apply resting forces
-        this.applyRestingForces();
+        //this.applyRestingForces();
         
         // 7. Measure error and correct
-        this.measureAndCorrectError();
+        //this.measureAndCorrectError();
         
         // 8. Apply normal collision resolution
         this.applyNormalCollision();
@@ -334,19 +334,27 @@ class PhysicsEngine {
             if (overlap < minOverlap) {
                 minOverlap = overlap;
                 separationAxis = axis.copy();
-                
-                // Ensure normal points from A to B
-                const centerA = this.getCenter(verticesA);
-                const centerB = this.getCenter(verticesB);
-                const centerDir = Vector2.subtract(centerB, centerA);
-                if (Vector2.dot(separationAxis, centerDir) < 0) {
-                    separationAxis = Vector2.multiply(separationAxis, -1);
-                }
             }
         }
         
-        // Find contact point (simple approach: check if vertices are inside)
-        const contactPoints = this.findContactPoints(verticesA, verticesB, rectA, rectB);
+        // Find contact points by checking vertices of each rectangle against the other
+        const contactPointsA = this.findContactPoints(verticesA, rectB);
+        const contactPointsB = this.findContactPoints(verticesB, rectA);
+                
+        // Ensure normal points from A to B
+        const centerA = this.getCenter(verticesA);
+        const centerB = this.getCenter(verticesB);
+        const centerDir = Vector2.subtract(centerB, centerA);
+        if (Vector2.dot(separationAxis, centerDir) < 0) {
+            separationAxis = Vector2.multiply(separationAxis, -1);
+        }
+        
+        const contactPoints = [...contactPointsA, ...contactPointsB];
+        
+        // If no contact points found, use fallback
+        if (contactPoints.length === 0) {
+            contactPoints.push(Vector2.multiply(Vector2.add(rectA.position, rectB.position), 0.5));
+        }
         
         return new Contact(rectA, rectB, contactPoints, separationAxis, minOverlap);
     }
@@ -382,25 +390,15 @@ class PhysicsEngine {
         return Vector2.multiply(sum, 1.0 / vertices.length);
     }
     
-    findContactPoints(verticesA, verticesB, rectA, rectB) {
+    findContactPoints(vertices, rect) {
         const contactPoints = [];
 
-        // Simple contact point: check if any vertex of A is inside B, or vice versa
-        for (const vertex of verticesA) {
-            if (this.isPointInRectangle(vertex, verticesB)) {
+        // Check if any vertex is inside the rectangle
+        const rectVertices = rect.getVertices();
+        for (const vertex of vertices) {
+            if (this.isPointInRectangle(vertex, rectVertices)) {
                 contactPoints.push(vertex);
             }
-        }
-        
-        for (const vertex of verticesB) {
-            if (this.isPointInRectangle(vertex, verticesA)) {
-                contactPoints.push(vertex);
-            }
-        }
-
-        // If no contact points found, use fallback
-        if (contactPoints.length === 0) {
-            contactPoints.push(Vector2.multiply(Vector2.add(rectA.position, rectB.position), 0.5));
         }
         
         return contactPoints;
