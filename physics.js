@@ -1,3 +1,7 @@
+
+
+let debug = 0;
+
 // Vector2 class for 2D math operations
 class Vector2 {
     constructor(x = 0, y = 0) {
@@ -67,6 +71,8 @@ class Rectangle {
         this.invInertia = isStatic ? 0 : 1.0 / this.inertia;
 
         // Friction coefficients
+        //this.staticFriction = isStatic ? 0.9 : 0.6;
+        //this.dynamicFriction = isStatic ? 0.7 : 0.4;
         this.staticFriction = isStatic ? 0.9 : 0.6;
         this.dynamicFriction = isStatic ? 0.7 : 0.4;
         
@@ -122,13 +128,13 @@ class Rectangle {
 
 // Collision contact information
 class Contact {
-    constructor(bodyA, bodyB, contactPoints, normal, penetration) {
+    constructor(bodyA, bodyB, contactPoints, normal, penetrations) {
         this.bodyA = bodyA;
         this.bodyB = bodyB;
         this.contactPoints = contactPoints; // Array of contact points, one per contact point
         this.normal = normal;
         this.tangent = Vector2.normalize(Vector2.perpendicular(normal));
-        this.penetration = penetration;
+        this.penetrations = penetrations; // Array of penetrations, one per contact point
         this.collisionMasses = []; // Array of collision masses, one per contact point
         this.tangentialCollisionMasses = []; // Array of tangential collision masses
         this.collisionMassesCalculated = []; // Array of booleans, one per contact point
@@ -223,13 +229,17 @@ class PhysicsEngine {
         // Create some random boxes
         for (let i = 0; i < 1; i++) {
             this.addRandomBox();
+
+            //const box = new Rectangle(200, 200, 50, 30, 1, false);
+            //box.angle = 0.1;
+            //this.bodies.push(box);
         }
     }
     
     addRandomBox() {
         const width = 30 + random() * 40;
         const height = 30 + random() * 40;
-        const x = 400 + random() * (this.worldWidth - 800);
+        const x = 200 + random() * (this.worldWidth - 800);
         const y = 50 + random() * 200;
         const mass = 0.5 + random() * 2.0;
         
@@ -269,10 +279,10 @@ class PhysicsEngine {
         this.separateObjects();
         
         // 6. Apply resting forces
-        //this.applyRestingForces();
+        this.applyRestingForces();
         
         // 7. Measure error and correct
-        //this.measureAndCorrectError();
+        this.measureAndCorrectError();
         
         // 8. Apply normal collision resolution
         this.applyNormalCollision();
@@ -308,20 +318,24 @@ class PhysicsEngine {
     }
     
     checkSATCollision(rectA, rectB) {
+        debug++;
         const verticesA = rectA.getVertices();
         const verticesB = rectB.getVertices();
         
         let minOverlap = Infinity;
+        let minOverlapA = Infinity;
+        let minOverlapB = Infinity;
         let separationAxis = null;
-        let contactPoint = null;
+        let minAxisA = null;
+        let minAxisB = null;
+        let projA_minAxisA;
+        let projB_minAxisB;
         
         // Test axes from both rectangles
-        const axes = [
-            ...this.getRectangleAxes(verticesA),
-            ...this.getRectangleAxes(verticesB)
-        ];
+        let axisA = this.getRectangleAxes(verticesA);
+        let axisB = this.getRectangleAxes(verticesB);
         
-        for (const axis of axes) {
+        for (const axis of axisA) {
             const projA = this.projectVertices(verticesA, axis);
             const projB = this.projectVertices(verticesB, axis);
             
@@ -330,10 +344,37 @@ class PhysicsEngine {
             if (overlap < 0) {
                 return null; // No collision
             }
-            
+
             if (overlap < minOverlap) {
                 minOverlap = overlap;
                 separationAxis = axis.copy();
+            }
+            
+            if (overlap < minOverlapA) {
+                minOverlapA = overlap;
+                minAxisA = axis.copy();
+                projA_minAxisA = projA;
+            }
+        }
+        for (const axis of axisB) {
+            const projA = this.projectVertices(verticesA, axis);
+            const projB = this.projectVertices(verticesB, axis);
+            
+            const overlap = Math.min(projA.max, projB.max) - Math.max(projA.min, projB.min);
+            
+            if (overlap < 0) {
+                return null; // No collision
+            }
+
+            if (overlap < minOverlap) {
+                minOverlap = overlap;
+                separationAxis = axis.copy();
+            }
+            
+            if (overlap < minOverlapB) {
+                minOverlapB = overlap;
+                minAxisB = axis.copy();
+                projB_minAxisB = projB;
             }
         }
         
@@ -355,8 +396,23 @@ class PhysicsEngine {
         if (contactPoints.length === 0) {
             contactPoints.push(Vector2.multiply(Vector2.add(rectA.position, rectB.position), 0.5));
         }
+
+        // Calculate penetration per contact point
+        const penetration = [];
+        for (const contactPoint of contactPoints) {
+
+            let pointProjectionA = Vector2.dot(contactPoint, minAxisA);
+            let minDistToA = Math.abs(pointProjectionA - projA_minAxisA.min);
+            minDistToA = Math.min(minDistToA, Math.abs(pointProjectionA - projA_minAxisA.max));
+            
+            let pointProjectionB = Vector2.dot(contactPoint, minAxisB);
+            let minDistToB = Math.abs(pointProjectionB - projB_minAxisB.min);
+            minDistToB = Math.min(minDistToB, Math.abs(pointProjectionB - projB_minAxisB.max));
+
+            penetration.push(Math.max(minDistToA, minDistToB));
+        }
         
-        return new Contact(rectA, rectB, contactPoints, separationAxis, minOverlap);
+        return new Contact(rectA, rectB, contactPoints, separationAxis, penetration);
     }
     
     getRectangleAxes(vertices) {
@@ -421,12 +477,13 @@ class PhysicsEngine {
     
     separateObjects() {
         for (const contact of this.contacts) {
-            const adjustedPenetration = Math.max(0, contact.penetration) - 2;
-            
             // Process each contact point
             for (let i = 0; i < contact.contactPoints.length; i++) {
                 const contactPoint = contact.contactPoints[i];
                 const collisionMass = contact.collisionMasses[i];
+                const penetration = contact.penetrations[i];
+                let adjustedPenetration = Math.max(0, penetration) - 2;
+                if(adjustedPenetration < 0) adjustedPenetration *= 0;//0.1;
                 
                 // Calculate displacement using collision mass (like impulse but for position)
                 const displacement = Vector2.multiply(contact.normal, adjustedPenetration * collisionMass * 0.3);
@@ -482,10 +539,14 @@ class PhysicsEngine {
             // Process each contact point
             for (let i = 0; i < contact.contactPoints.length; i++) {
                 // Calculate combined velocities (delta + resting)
-                const combinedVelA = Vector2.subtract(contact.bodyA.deltaVelocity, cache.restingVelocityA);
-                const combinedVelB = Vector2.subtract(contact.bodyB.deltaVelocity, cache.restingVelocityB);
-                const combinedAngVelA = contact.bodyA.deltaAngularVelocity - cache.restingAngularVelocityA;
-                const combinedAngVelB = contact.bodyB.deltaAngularVelocity - cache.restingAngularVelocityB;
+                //const combinedVelA = Vector2.subtract(contact.bodyA.deltaVelocity, cache.restingVelocityA);
+                //const combinedVelB = Vector2.subtract(contact.bodyB.deltaVelocity, cache.restingVelocityB);
+                //const combinedAngVelA = contact.bodyA.deltaAngularVelocity - cache.restingAngularVelocityA;
+                //const combinedAngVelB = contact.bodyB.deltaAngularVelocity - cache.restingAngularVelocityB;
+                const combinedVelA = Vector2.multiply(cache.restingVelocityA, -1);
+                const combinedVelB = Vector2.multiply(cache.restingVelocityB, -1);
+                const combinedAngVelA = - cache.restingAngularVelocityA;
+                const combinedAngVelB = - cache.restingAngularVelocityB;
                 
                 // Normal force
                 const impulse = this.calculateImpulse(contact, i, combinedVelA, combinedVelB, combinedAngVelA, combinedAngVelB, 
@@ -498,12 +559,19 @@ class PhysicsEngine {
                 const frictionImpulse = this.calculateImpulse(contact, i, combinedVelA, combinedVelB, combinedAngVelA, combinedAngVelB,
                     contact.tangentialCollisionMasses[i], contact.tangent, true);
                 const combinedStaticFriction = Math.min(contact.bodyA.staticFriction, contact.bodyB.staticFriction);
+                const combinedDynamicFriction = Math.min(contact.bodyA.dynamicFriction, contact.bodyB.dynamicFriction);
                 const maxStaticFriction = contact.normalForceMagnitudes[i] * combinedStaticFriction;
                 
                 // Combine impulses and apply once
                 let totalImpulse = impulse;
                 if (Vector2.length(frictionImpulse) <= maxStaticFriction) {
-                    //totalImpulse = Vector2.add(impulse, frictionImpulse);
+                    totalImpulse = Vector2.add(impulse, frictionImpulse);
+               } else {
+                   // Apply dynamic friction
+                   const dynamicFriction = contact.normalForceMagnitudes[i] * combinedDynamicFriction;
+                   const frictionDirection = Vector2.normalize(frictionImpulse);
+                   const dynamicFrictionImpulse = Vector2.multiply(frictionDirection, dynamicFriction);
+                   totalImpulse = Vector2.add(impulse, dynamicFrictionImpulse);
                 }
 
                 // Apply combined impulse to both real and delta velocities
@@ -531,12 +599,19 @@ class PhysicsEngine {
                     contact.bodyA.deltaAngularVelocity, contact.bodyB.deltaAngularVelocity,
                     contact.tangentialCollisionMasses[i], contact.tangent, true);
                 const combinedStaticFriction = Math.min(contact.bodyA.staticFriction, contact.bodyB.staticFriction);
+                const combinedDynamicFriction = Math.min(contact.bodyA.dynamicFriction, contact.bodyB.dynamicFriction);
                 const maxStaticFriction = (contact.normalForceMagnitudes[i] + Vector2.length(impulse)) * combinedStaticFriction;
                 
                 // Combine impulses and apply once
                 let totalImpulse = impulse;
                 if (Vector2.length(frictionImpulse) <= maxStaticFriction) {
-                    //totalImpulse = Vector2.add(impulse, frictionImpulse);
+                    totalImpulse = Vector2.add(impulse, frictionImpulse);
+               } else {
+                   // Apply dynamic friction
+                   const dynamicFriction = (contact.normalForceMagnitudes[i] + Vector2.length(impulse)) * combinedDynamicFriction;
+                   const frictionDirection = Vector2.normalize(frictionImpulse);
+                   const dynamicFrictionImpulse = Vector2.multiply(frictionDirection, dynamicFriction);
+                   totalImpulse = Vector2.add(impulse, dynamicFrictionImpulse);
                 }
                 
                 // Apply combined impulse to delta velocities and resting
