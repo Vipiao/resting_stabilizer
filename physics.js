@@ -478,6 +478,33 @@ class PhysicsEngine {
         return true;
     }
     
+    resetDeltaVelocities() {
+        for (const body of this.bodies) {
+            body.deltaVelocity = new Vector2(0, 0);
+            body.deltaAngularVelocity = 0;
+        }
+    }
+    
+    applyForces() {
+        const gravityDelta = this.gravity;
+        
+        for (const body of this.bodies) {
+            if (!body.isStatic) {
+                body.velocity = Vector2.add(body.velocity, gravityDelta);
+                body.deltaVelocity = Vector2.add(body.deltaVelocity, gravityDelta);
+            }
+        }
+    }
+    
+    integrateMotion() {
+        for (const body of this.bodies) {
+            if (!body.isStatic) {
+                body.position = Vector2.add(body.position, body.velocity);
+                body.angle += body.angularVelocity;
+            }
+        }
+    }
+    
     separateObjects() {
         for (const contact of this.contacts) {
             // Process each contact point
@@ -503,33 +530,6 @@ class PhysicsEngine {
                     const rB = Vector2.subtract(contactPoint, contact.bodyB.position);
                     contact.bodyB.angle += Vector2.cross(rB, displacement) * contact.bodyB.invInertia;
                 }
-            }
-        }
-    }
-    
-    resetDeltaVelocities() {
-        for (const body of this.bodies) {
-            body.deltaVelocity = new Vector2(0, 0);
-            body.deltaAngularVelocity = 0;
-        }
-    }
-    
-    applyForces() {
-        const gravityDelta = this.gravity;
-        
-        for (const body of this.bodies) {
-            if (!body.isStatic) {
-                body.velocity = Vector2.add(body.velocity, gravityDelta);
-                body.deltaVelocity = Vector2.add(body.deltaVelocity, gravityDelta);
-            }
-        }
-    }
-    
-    integrateMotion() {
-        for (const body of this.bodies) {
-            if (!body.isStatic) {
-                body.position = Vector2.add(body.position, body.velocity);
-                body.angle += body.angularVelocity;
             }
         }
     }
