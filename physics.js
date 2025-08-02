@@ -228,18 +228,18 @@ class PhysicsEngine {
         
         // Create some random boxes
         for (let i = 0; i < 1; i++) {
-            this.addRandomBox();
+            //this.addRandomBox();
 
-            //const box = new Rectangle(200, 200, 50, 30, 1, false);
-            //box.angle = 0.1;
-            //this.bodies.push(box);
+            const box = new Rectangle(200, 200, 50, 30, 1, false);
+            box.angle = 0.1;
+            this.bodies.push(box);
         }
     }
     
     addRandomBox() {
         const width = 30 + random() * 40;
         const height = 30 + random() * 40;
-        const x = 200 + random() * (this.worldWidth - 800);
+        const x = 200 + random() * 100;
         const y = 50 + random() * 200;
         const mass = 0.5 + random() * 2.0;
         
@@ -289,6 +289,9 @@ class PhysicsEngine {
 
         // 9. Handle mouse interactions
         this.updateMouseInteraction();
+
+        // 10. Apply resting decay.
+        this.applyRestingDecay();
         
         // Clean up old cache entries
         this.cleanupContactCache();
@@ -483,7 +486,7 @@ class PhysicsEngine {
                 const collisionMass = contact.collisionMasses[i];
                 const penetration = contact.penetrations[i];
                 let adjustedPenetration = Math.max(0, penetration) - 2;
-                if(adjustedPenetration < 0) adjustedPenetration *= 0;//0.1;
+                if(adjustedPenetration < 0) adjustedPenetration *= 0.0;
                 
                 // Calculate displacement using collision mass (like impulse but for position)
                 const displacement = Vector2.multiply(contact.normal, adjustedPenetration * collisionMass * 0.3);
@@ -543,10 +546,16 @@ class PhysicsEngine {
                 //const combinedVelB = Vector2.subtract(contact.bodyB.deltaVelocity, cache.restingVelocityB);
                 //const combinedAngVelA = contact.bodyA.deltaAngularVelocity - cache.restingAngularVelocityA;
                 //const combinedAngVelB = contact.bodyB.deltaAngularVelocity - cache.restingAngularVelocityB;
-                const combinedVelA = Vector2.multiply(cache.restingVelocityA, -1);
-                const combinedVelB = Vector2.multiply(cache.restingVelocityB, -1);
-                const combinedAngVelA = - cache.restingAngularVelocityA;
-                const combinedAngVelB = - cache.restingAngularVelocityB;
+                
+                //const combinedVelA = Vector2.multiply(cache.restingVelocityA, -1);
+                //const combinedVelB = Vector2.multiply(cache.restingVelocityB, -1);
+                //const combinedAngVelA = - cache.restingAngularVelocityA;
+                //const combinedAngVelB = - cache.restingAngularVelocityB;
+
+                const combinedVelA = Vector2.subtract(contact.bodyA.velocity, cache.restingVelocityA);
+                const combinedVelB = Vector2.subtract(contact.bodyB.velocity, cache.restingVelocityB);
+                const combinedAngVelA = contact.bodyA.angularVelocity - cache.restingAngularVelocityA;
+                const combinedAngVelB = contact.bodyB.angularVelocity - cache.restingAngularVelocityB;
                 
                 // Normal force
                 const impulse = this.calculateImpulse(contact, i, combinedVelA, combinedVelB, combinedAngVelA, combinedAngVelB, 
@@ -575,7 +584,8 @@ class PhysicsEngine {
                 }
 
                 // Apply combined impulse to both real and delta velocities
-                this.applyImpulseToVelocities(contact, i, totalImpulse, true, true, false);
+                // contact, contactPointIndex, impulse, applyToReal, applyToDelta, applyToResting
+                this.applyImpulseToVelocities(contact, i, totalImpulse, true, false, false);
             }
         }
     }
@@ -589,14 +599,14 @@ class PhysicsEngine {
             for (let i = 0; i < contact.contactPoints.length; i++) {
                 // Normal force
                 const impulse = this.calculateImpulse(contact, i,
-                    contact.bodyA.deltaVelocity, contact.bodyB.deltaVelocity,
-                    contact.bodyA.deltaAngularVelocity, contact.bodyB.deltaAngularVelocity,
+                    contact.bodyA.velocity, contact.bodyB.velocity,
+                    contact.bodyA.angularVelocity, contact.bodyB.angularVelocity,
                     contact.collisionMasses[i], contact.normal, true);
                 
                 // Friction force
                 const frictionImpulse = this.calculateImpulse(contact, i,
-                    contact.bodyA.deltaVelocity, contact.bodyB.deltaVelocity,
-                    contact.bodyA.deltaAngularVelocity, contact.bodyB.deltaAngularVelocity,
+                    contact.bodyA.velocity, contact.bodyB.velocity,
+                    contact.bodyA.angularVelocity, contact.bodyB.deltaAngularVelocity,
                     contact.tangentialCollisionMasses[i], contact.tangent, true);
                 const combinedStaticFriction = Math.min(contact.bodyA.staticFriction, contact.bodyB.staticFriction);
                 const combinedDynamicFriction = Math.min(contact.bodyA.dynamicFriction, contact.bodyB.dynamicFriction);
@@ -615,7 +625,8 @@ class PhysicsEngine {
                 }
                 
                 // Apply combined impulse to delta velocities and resting
-                this.applyImpulseToVelocities(contact, i, totalImpulse, false, true, true);
+                // contact, contactPointIndex, impulse, applyToReal, applyToDelta, applyToResting
+                this.applyImpulseToVelocities(contact, i, totalImpulse, false, false, true);
             }
         }
     }
@@ -654,6 +665,7 @@ class PhysicsEngine {
                 }
 
                 // Apply combined impulse to real velocities
+                // contact, contactPointIndex, impulse, applyToReal, applyToDelta, applyToResting
                 this.applyImpulseToVelocities(contact, i, totalImpulse, true, false, false);
             }
         }
@@ -821,6 +833,18 @@ class PhysicsEngine {
             // Reduce velocity by 40%
             this.grabbedBody.velocity = Vector2.multiply(this.grabbedBody.velocity, 0.6);
             this.grabbedBody.angularVelocity *= 0.6;
+        }
+    }
+
+    applyRestingDecay() {
+        for (const contact of this.contacts) {
+            const cache = this.getContactCache(contact.bodyA, contact.bodyB);
+
+            let ff = 1;
+            cache.restingVelocityA = Vector2.multiply(cache.restingVelocityA, ff);
+            cache.restingVelocityB = Vector2.multiply(cache.restingVelocityB, ff);
+            cache.restingAngularVelocityA *= ff;
+            cache.restingAngularVelocityA *= ff;
         }
     }
     
